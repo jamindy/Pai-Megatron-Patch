@@ -22,3 +22,7 @@
 [submodule "PAI-Megatron-LM-240718"]
 	path = PAI-Megatron-LM-240718
 	url = https://github.com/jerryli1981/PAI-Megatron-LM-240718
+[submodule "Megatron-LM-241105"]
+	path = Megatron-LM-241105
+	url = https://github.com/NVIDIA/Megatron-LM.git
+	branch = core_r0.9.0
