@@ -13,20 +13,11 @@
 # limitations under the License.
 
 from megatron.core.fusions.fused_bias_dropout import get_bias_dropout_add
-from megatron.core.fusions.fused_layer_norm import FusedLayerNorm
 from megatron.core.tensor_parallel.layers import ColumnParallelLinear, RowParallelLinear
-
-from megatron.core.transformer.custom_layers.transformer_engine import (
-    TEDotProductAttention,
-    TELayerNormColumnParallelLinear,
-    TENorm,
-    TERowParallelLinear,
-    TEColumnParallelLinear,
-)
+from megatron.core.transformer.attention import SelfAttention, SelfAttentionSubmodules
 from megatron.core.transformer.dot_product_attention import DotProductAttention
 from megatron.core.transformer.enums import AttnMaskType
 from megatron.core.transformer.identity_op import IdentityOp
-
 from megatron.core.transformer.spec_utils import ModuleSpec
 
 
@@ -35,6 +26,37 @@ from .transformer.attention import SelfAttention, SelfAttentionSubmodules
 from .moe.moe_layer import MoELayer
 from .transformer_layer import TransformerLayer, TransformerLayerSubmodules
 from .rms_norm import Qwen2RMSNorm
+
+try:
+    from megatron.core.extensions.transformer_engine import (
+        TEColumnParallelGroupedLinear,
+        TEColumnParallelLinear,
+        TEDotProductAttention,
+        TELayerNormColumnParallelLinear,
+        TENorm,
+        TERowParallelGroupedLinear,
+        TERowParallelLinear,
+    )
+
+    HAVE_TE = True
+except ImportError:
+    HAVE_TE = False
+
+try:
+    import apex  # pylint: disable=unused-import
+
+    from megatron.core.fusions.fused_layer_norm import FusedLayerNorm
+
+    HAVE_APEX = True
+    LNImpl = FusedLayerNorm
+except ImportError:
+    import warnings
+
+    from megatron.core.transformer.torch_layer_norm import WrappedTorchLayerNorm
+
+    warnings.warn('Apex is not installed. Falling back to Torch LayerNorm')
+    LNImpl = WrappedTorchLayerNorm
+
 
 # Use this spec to use lower level Transformer Engine modules (required for fp8 training)
 def get_gpt_layer_with_transformer_engine_spec(
@@ -114,9 +136,20 @@ def _get_mlp_module_spec(
         )
     else:
         # Mixture of experts with modules in megatron core.
+        if use_te and moe_grouped_gemm:
+            linear_fc1 = TEColumnParallelGroupedLinear
+            linear_fc2 = TERowParallelGroupedLinear
+        else:
+            linear_fc1 = ColumnParallelLinear
+            linear_fc2 = RowParallelLinear
+
+        use_te_grouped_gemm = use_te and TEColumnParallelGroupedLinear is not None
+
         return ModuleSpec(
             module=MoELayer,
-            submodules=MLPSubmodules(linear_fc1=ColumnParallelLinear, linear_fc2=RowParallelLinear,)
-            if not moe_grouped_gemm
-            else None,
+            submodules=(
+                MLPSubmodules(linear_fc1=linear_fc1, linear_fc2=linear_fc2)
+                if not moe_grouped_gemm or use_te_grouped_gemm
+                else None
+            ),
         )
